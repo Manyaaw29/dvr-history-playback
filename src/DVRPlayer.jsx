@@ -4,53 +4,48 @@ import Hls from 'hls.js';
 import { requestClipList, getVideoList, startPlayback, login, DEMO_IMEI } from './api';
 import { MOCK_CLIPS, DEMO_VIDEOS } from './mockData';
 
-// ─── utils ───────────────────────────────────────────────────────────────────
-function fmt(sec) {
-  if (!isFinite(sec) || sec < 0) return '0:00';
-  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-const camLabel = (ch) => ch === 1 ? 'FWD' : 'IN';
-const camCls   = (ch) => ch === 1 ? 'fwd' : 'in';
-const HOURS    = Array.from({ length: 25 }, (_, i) => i);
-const TL_W     = 1440; // 1px per minute
+// ── helpers ──────────────────────────────────────────────────────────────────
+const fmt = (s) => {
+  if (!isFinite(s) || s < 0) return '0:00';
+  return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+};
+const camLbl = (ch) => ch === 1 ? 'FWD' : 'IN';
+const camCls = (ch) => ch === 1 ? 'fwd' : 'in';
 
-function toX(timeStr) {
-  const t = dayjs(timeStr);
-  return ((t.hour() * 60 + t.minute() + t.second() / 60) / 1440) * TL_W;
-}
-function segW(dur) { return Math.max(3, (dur / 86400) * TL_W); }
+// Timeline geometry — 1440 logical px = 24 hours
+const TL = 1440;
+const toX  = (t) => { const d = dayjs(t); return ((d.hour()*60 + d.minute() + d.second()/60) / 1440) * TL; };
+const segW = (dur) => Math.max(3, (dur / 86400) * TL);
 
-const CHANNEL_OPTS = [
-  { label: 'Both',    value: 'both' },
-  { label: 'Forward', value: '1'    },
-  { label: 'In-Cabin',value: '2'    },
+const HOURS = Array.from({ length: 25 }, (_, i) => i);
+const CAM_OPTS = [
+  { label: 'Both',     val: 'both' },
+  { label: 'Forward',  val: '1'    },
+  { label: 'In-Cabin', val: '2'    },
 ];
+const SPEEDS = [0.5, 1, 1.5, 2, 4];
+const POLL_MS = 3000, POLL_MAX = 20;
 
-const POLL_MS  = 3000;
-const POLL_MAX = 20;
-
-// ─── Component ────────────────────────────────────────────────────────────────
+// ── component ─────────────────────────────────────────────────────────────────
 export default function DVRPlayer() {
-  const today = dayjs().format('YYYY-MM-DD');
-  const [date,     setDate]     = useState('2026-05-10');
-  const [channel,  setChannel]  = useState('both');
-  const [clips,    setClips]    = useState([]);
-  const [activeIdx,setActiveIdx]= useState(-1);
-  const [loading,  setLoading]  = useState(false);
-  const [status,   setStatus]   = useState('');
-  const [autoPlay, setAutoPlay] = useState(true);
-  const [usingMock,setUsingMock]= useState(false);
-  const [toast,    setToast]    = useState(null);
+  const [date,      setDate]      = useState('2026-05-10');
+  const [cam,       setCam]       = useState('both');
+  const [clips,     setClips]     = useState([]);      // all clips (for timeline)
+  const [activeIdx, setActiveIdx] = useState(-1);      // index into visible[]
+  const [loading,   setLoading]   = useState(false);
+  const [status,    setStatus]    = useState('');
+  const [autoPlay,  setAutoPlay]  = useState(true);
+  const [isMock,    setIsMock]    = useState(false);
+  const [toast,     setToast]     = useState(null);
 
-  // video
-  const [playing,  setPlaying]  = useState(false);
-  const [curTime,  setCurTime]  = useState(0);
-  const [dur,      setDur]      = useState(0);
-  const [vol,      setVol]      = useState(0.8);
-  const [speed,    setSpeed]    = useState(1);
-  const [hasStream,setHasStream]= useState(false);
-  const [loadClip, setLoadClip] = useState(false);
+  // video state
+  const [hasStream, setHasStream] = useState(false);
+  const [loadingClip, setLoadingClip] = useState(false);
+  const [playing,   setPlaying]   = useState(false);
+  const [curTime,   setCurTime]   = useState(0);
+  const [dur,       setDur]       = useState(0);
+  const [vol,       setVol]       = useState(0.8);
+  const [speedIdx,  setSpeedIdx]  = useState(1); // index into SPEEDS
 
   const videoRef = useRef(null);
   const hlsRef   = useRef(null);
@@ -58,32 +53,28 @@ export default function DVRPlayer() {
   const listRef  = useRef(null);
   const tlRef    = useRef(null);
 
-  // silent auto-auth on mount
-  useEffect(() => {
-    login('demo@okdriver.in', '12345678').catch(() => {});
-  }, []);
+  // Silently try to auth on mount — ignore failure
+  useEffect(() => { login('demo@okdriver.in', '12345678').catch(() => {}); }, []);
 
-  const showToast = useCallback((msg, type = 'info') => {
+  const notify = useCallback((msg, type = 'info') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3500);
   }, []);
 
-  // ── filtered clips ────────────────────────────────────────────────────────
-  const visible = clips.filter(c =>
-    channel === 'both' || String(c.channel) === channel
-  );
+  // clips filtered by selected camera
+  const visible = clips.filter(c => cam === 'both' || String(c.channel) === cam);
 
-  // ── LOAD CLIPS ────────────────────────────────────────────────────────────
-  async function handleFetch() {
+  // ── fetch clips ────────────────────────────────────────────────────────────
+  async function handleLoad() {
     setLoading(true);
     setClips([]);
     setActiveIdx(-1);
     setHasStream(false);
-    setUsingMock(false);
-    setStatus('Requesting clips from device…');
+    setIsMock(false);
+    setStatus('Requesting device…');
 
     try {
-      const chans = channel === 'both' ? [1, 2] : [parseInt(channel)];
+      const chans = cam === 'both' ? [1, 2] : [parseInt(cam)];
       await Promise.all(chans.map(ch => requestClipList(DEMO_IMEI, date, ch).catch(() => {})));
       setStatus('Waiting for device…');
 
@@ -94,99 +85,88 @@ export default function DVRPlayer() {
         try {
           const raw = await getVideoList(DEMO_IMEI);
           const arr = Array.isArray(raw) ? raw : [];
-
           if (arr.length > 0) {
             clearInterval(pollRef.current);
-            const normalized = arr
+            const norm = arr
               .map(c => ({
-                filename:  c.filename || c.name || c.file || '',
-                channel:   c.channel ?? 1,
-                startTime: c.startTime || c.start_time || null,
-                duration:  c.duration ?? 60,
+                filename: c.filename || c.name || '',
+                channel:  c.channel ?? 1,
+                startTime:c.startTime || c.start_time || null,
+                duration: c.duration ?? 60,
               }))
               .filter(c => c.filename)
               .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-            setClips(normalized);
-            setStatus('');
+            setClips(norm);
             setLoading(false);
-            showToast(`${normalized.length} clips loaded`, 'success');
+            setStatus('');
+            notify(`${norm.length} clips loaded`, 'success');
           } else if (polls >= POLL_MAX) {
             throw new Error('timeout');
           } else {
-            setStatus(`Polling device… (${polls}/${POLL_MAX})`);
+            setStatus(`Polling… ${polls}/${POLL_MAX}`);
           }
         } catch {
           if (polls >= POLL_MAX) {
             clearInterval(pollRef.current);
-            fallbackToMock();
+            loadMock();
           }
         }
       }, POLL_MS);
     } catch {
-      fallbackToMock();
+      loadMock();
     }
   }
 
-  function fallbackToMock() {
-    const filtered = MOCK_CLIPS.filter(c => {
-      if (channel === 'both') return true;
-      return String(c.channel) === channel;
-    });
-    setClips(MOCK_CLIPS); // keep all for timeline
-    setUsingMock(true);
+  function loadMock() {
+    setClips(MOCK_CLIPS);
+    setIsMock(true);
     setLoading(false);
     setStatus('');
-    showToast(`Demo mode — ${filtered.length} sample clips loaded`, 'info');
+    notify('Demo mode — sample clips loaded', 'info');
   }
 
   useEffect(() => () => clearInterval(pollRef.current), []);
 
-  // ── PLAY CLIP ─────────────────────────────────────────────────────────────
+  // ── play a clip ────────────────────────────────────────────────────────────
   const playClip = useCallback(async (idx) => {
     const clip = visible[idx];
     if (!clip) return;
     setActiveIdx(idx);
-    setLoadClip(true);
+    setLoadingClip(true);
     setPlaying(false);
     setCurTime(0);
     setDur(0);
 
-    // scroll list
+    // scroll sidebar item into view
     setTimeout(() => {
       listRef.current?.querySelector(`[data-idx="${idx}"]`)
         ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }, 80);
 
-    // scroll timeline to keep active segment visible
-    setTimeout(() => {
-      if (clip.startTime && tlRef.current) {
+    // scroll timeline to active segment
+    if (clip.startTime && tlRef.current) {
+      setTimeout(() => {
         const x = toX(clip.startTime);
-        tlRef.current.scrollLeft = Math.max(0, x - 200);
-      }
-    }, 80);
+        tlRef.current.scrollLeft = Math.max(0, x - 160);
+      }, 80);
+    }
 
+    let url = '';
     try {
-      let url = '';
-      if (!usingMock) {
+      if (!isMock) {
         const res = await startPlayback(DEMO_IMEI, clip.filename);
         url = res?.streamUrl || res?.url || res?.hlsUrl ||
               res?.data?.url || res?.data?.streamUrl || '';
       }
-      // Always fall back to demo video if no real URL
-      if (!url) {
-        const vidIdx = idx % DEMO_VIDEOS.length;
-        url = DEMO_VIDEOS[vidIdx];
-      }
-      setHasStream(true);
-      setLoadClip(false);
-      attachStream(url);
-    } catch {
-      const vidIdx = idx % DEMO_VIDEOS.length;
-      setHasStream(true);
-      setLoadClip(false);
-      attachStream(DEMO_VIDEOS[vidIdx]);
-    }
-  }, [visible, usingMock]); // eslint-disable-line
+    } catch { /* fallthrough */ }
+
+    // Fallback to demo video
+    if (!url) url = DEMO_VIDEOS[idx % DEMO_VIDEOS.length];
+
+    setHasStream(true);
+    setLoadingClip(false);
+    attachStream(url);
+  }, [visible, isMock]);
 
   function attachStream(url) {
     const v = videoRef.current;
@@ -198,7 +178,7 @@ export default function DVRPlayer() {
       hlsRef.current = hls;
       hls.loadSource(url);
       hls.attachMedia(v);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { v.play().catch(() => {}); });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
     } else {
       v.src = url;
       v.load();
@@ -206,173 +186,129 @@ export default function DVRPlayer() {
     }
   }
 
-  // video event bindings
+  // video event wiring
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    const onTime  = () => setCurTime(v.currentTime);
-    const onDur   = () => setDur(v.duration);
-    const onPlay  = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
-    const onEnded = () => {
+    const t = () => setCurTime(v.currentTime);
+    const d = () => setDur(v.duration);
+    const p = () => setPlaying(true);
+    const pa= () => setPlaying(false);
+    const e = () => {
       setPlaying(false);
-      if (autoPlay) {
-        const next = activeIdx + 1;
-        if (next < visible.length) playClip(next);
-      }
+      if (autoPlay && activeIdx + 1 < visible.length) playClip(activeIdx + 1);
     };
-    v.addEventListener('timeupdate',    onTime);
-    v.addEventListener('durationchange',onDur);
-    v.addEventListener('play',          onPlay);
-    v.addEventListener('pause',         onPause);
-    v.addEventListener('ended',         onEnded);
+    v.addEventListener('timeupdate',    t);
+    v.addEventListener('durationchange',d);
+    v.addEventListener('play',          p);
+    v.addEventListener('pause',         pa);
+    v.addEventListener('ended',         e);
     return () => {
-      v.removeEventListener('timeupdate',    onTime);
-      v.removeEventListener('durationchange',onDur);
-      v.removeEventListener('play',          onPlay);
-      v.removeEventListener('pause',         onPause);
-      v.removeEventListener('ended',         onEnded);
+      v.removeEventListener('timeupdate',    t);
+      v.removeEventListener('durationchange',d);
+      v.removeEventListener('play',          p);
+      v.removeEventListener('pause',         pa);
+      v.removeEventListener('ended',         e);
     };
   }, [autoPlay, activeIdx, visible, playClip]);
 
   useEffect(() => { if (videoRef.current) videoRef.current.volume = vol; }, [vol]);
-  useEffect(() => { if (videoRef.current) videoRef.current.playbackRate = speed; }, [speed]);
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.playbackRate = SPEEDS[speedIdx];
+  }, [speedIdx]);
 
-  function togglePlay() {
+  const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
     playing ? v.pause() : v.play().catch(() => {});
-  }
+  };
 
-  function seek(e) {
+  const seek = (e) => {
     const v = videoRef.current;
     if (!v || !dur) return;
     const r = e.currentTarget.getBoundingClientRect();
     v.currentTime = ((e.clientX - r.left) / r.width) * dur;
-  }
-
-  function cycleSpeed() {
-    const steps = [0.5, 1, 1.5, 2, 4];
-    setSpeed(s => steps[(steps.indexOf(s) + 1) % steps.length]);
-  }
+  };
 
   const activeClip = visible[activeIdx] ?? null;
-
-  // cursor X = left-edge of active segment + progress into it
+  // playhead x
   const cursorX = activeClip?.startTime
     ? toX(activeClip.startTime) + (dur > 0 ? (curTime / dur) * segW(activeClip.duration) : 0)
     : null;
 
-  // ── RENDER ────────────────────────────────────────────────────────────────
+  // ── render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="app-shell">
+    <div className="shell">
 
-      {/* ── HEADER ── */}
-      <header className="header">
-        <span className="header-logo-text">okDriver</span>
-        <div className="header-divider" />
-        <span className="header-title">DVR History Playback</span>
-        <div className="header-spacer" />
-        {usingMock && (
-          <span style={{ fontSize: 11, background: 'rgba(245,158,11,.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,.3)', borderRadius: 6, padding: '3px 10px' }}>
-            Demo Mode
-          </span>
-        )}
-        <div className="header-badge">
+      {/* ── TOOLBAR ── */}
+      <header className="toolbar">
+        <div className="brand">
+          <div>
+            <div className="brand-name">ClipVault DVR</div>
+            <div className="brand-sub">History Playback</div>
+          </div>
+        </div>
+
+        <div className="tb-sep" />
+
+        {/* Date */}
+        <div className="tb-group">
+          <span className="tb-lbl">Date</span>
+          <input
+            id="date-picker"
+            className="tb-date"
+            type="date"
+            value={date}
+            max={dayjs().format('YYYY-MM-DD')}
+            onChange={e => setDate(e.target.value)}
+          />
+        </div>
+
+        {/* Camera */}
+        <div className="tb-group">
+          <span className="tb-lbl">Camera</span>
+          <div className="cam-pills">
+            {CAM_OPTS.map(o => (
+              <button
+                key={o.val}
+                id={`cam-${o.val}`}
+                className={`cam-pill${cam === o.val ? ' active' : ''}`}
+                onClick={() => setCam(o.val)}
+              >{o.label}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Load */}
+        <button
+          id="load-clips-btn"
+          className="load-btn"
+          onClick={handleLoad}
+          disabled={loading}
+        >
+          {loading
+            ? <><span className="spinner" />{status || 'Loading…'}</>
+            : <>⟳ Load Clips</>}
+        </button>
+
+        <div className="tb-spacer" />
+
+        {isMock && <span className="demo-badge">DEMO MODE</span>}
+
+        <div className="vehicle-chip">
           <span className="dot" />
           DL5CJ7355 — OKD200
         </div>
       </header>
 
-      <div className="main-content">
+      {/* ── BODY ── */}
+      <div className="body-area">
 
-        {/* ── SIDEBAR ── */}
-        <aside className="sidebar">
-          <div className="sidebar-filters">
-            <div>
-              <div className="filter-label">Date</div>
-              <input
-                id="date-picker"
-                className="date-input"
-                type="date"
-                value={date}
-                max={today}
-                onChange={e => setDate(e.target.value)}
-              />
-            </div>
-            <div>
-              <div className="filter-label">Camera</div>
-              <div className="cam-tabs">
-                {CHANNEL_OPTS.map(o => (
-                  <button
-                    key={o.value}
-                    id={`cam-tab-${o.value}`}
-                    className={`cam-tab${channel === o.value ? ' active' : ''}`}
-                    onClick={() => setChannel(o.value)}
-                  >{o.label}</button>
-                ))}
-              </div>
-            </div>
-            <button
-              id="fetch-clips-btn"
-              className="fetch-btn"
-              onClick={handleFetch}
-              disabled={loading}
-            >
-              {loading
-                ? <><span className="spinner" />{status || 'Loading…'}</>
-                : '⟳  Load Clips'}
-            </button>
-          </div>
-
-          <div className="clip-list-header">
-            <h3>Clips</h3>
-            <span className="clip-count">{visible.length}</span>
-          </div>
-
-          {visible.length === 0 && !loading && (
-            <div className="no-clips-msg">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.2}>
-                <path d="M15 10l4.553-2.369A1 1 0 0121 8.56v6.88a1 1 0 01-1.447.889L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
-              </svg>
-              Select a date and load clips
-            </div>
-          )}
-
-          <div className="clip-list" ref={listRef}>
-            {visible.map((c, i) => {
-              const ts  = c.startTime ? dayjs(c.startTime).format('HH:mm:ss') : c.filename;
-              const cc  = camCls(c.channel);
-              return (
-                <div
-                  key={c.filename + i}
-                  data-idx={i}
-                  id={`clip-item-${i}`}
-                  className={`clip-item${activeIdx === i ? ' active' : ''}`}
-                  onClick={() => playClip(i)}
-                  title={c.filename}
-                >
-                  <div className={`clip-icon ${cc}`}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M8 5v14l11-7z"/>
-                    </svg>
-                  </div>
-                  <div className="clip-info">
-                    <div className="clip-time">{ts}</div>
-                    <div className="clip-name">{c.filename}</div>
-                  </div>
-                  <span className={`clip-cam-tag ${cc}`}>{camLabel(c.channel)}</span>
-                </div>
-              );
-            })}
-          </div>
-        </aside>
-
-        {/* ── VIDEO AREA ── */}
-        <div className="video-area">
+        {/* ── VIDEO SECTION ── */}
+        <div className="video-section">
 
           {/* Player */}
-          <div className="video-panel" id="video-panel">
+          <div className="video-wrap" id="video-wrap">
             <video
               ref={videoRef}
               id="main-video"
@@ -381,224 +317,243 @@ export default function DVRPlayer() {
               crossOrigin="anonymous"
             />
 
-            {/* Empty state */}
-            {!hasStream && !loadClip && (
-              <div className="video-overlay">
+            {/* Empty / loading state */}
+            {!hasStream && !loadingClip && (
+              <div className="v-overlay">
                 <button
-                  id="overlay-play-btn"
-                  className="overlay-play-btn"
+                  id="big-play-btn"
+                  className="big-play"
                   onClick={() => visible.length > 0 && playClip(0)}
                   aria-label="Play first clip"
                 >
-                  <svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M8 5v14l11-7z"/>
                   </svg>
                 </button>
-                <span className="overlay-text">
-                  {visible.length > 0 ? 'Click a clip or timeline segment to play' : 'Load clips to begin'}
+                <span className="v-hint">
+                  {visible.length > 0 ? 'Click a clip or a timeline segment to play' : 'Load clips to begin playback'}
                 </span>
               </div>
             )}
 
-            {/* Loading clip */}
-            {loadClip && (
-              <div className="video-overlay">
-                <span className="spinner" style={{ width: 36, height: 36, borderWidth: 3 }} />
-                <span className="overlay-text">Starting playback…</span>
+            {loadingClip && (
+              <div className="v-overlay">
+                <span className="spinner light" style={{ width: 34, height: 34, borderWidth: 3 }} />
+                <span className="v-hint">Starting stream…</span>
               </div>
             )}
 
             {/* Controls */}
             {hasStream && (
-              <div className={`video-controls${!playing ? ' always-show' : ''}`}>
+              <div className={`vcontrols${!playing ? ' show' : ''}`}>
                 {/* Scrubber */}
                 <div
-                  id="progress-bar"
-                  className="progress-bar-wrap"
+                  id="seek-bar"
+                  className="scrubber"
                   onClick={seek}
                   role="slider"
                   aria-label="Seek"
-                  aria-valuenow={Math.round(curTime)}
-                  aria-valuemax={Math.round(dur)}
                 >
                   <div
-                    className="progress-bar-fill"
+                    className="scrubber-fill"
                     style={{ width: `${dur > 0 ? (curTime / dur) * 100 : 0}%` }}
                   />
                 </div>
 
-                <div className="controls-row">
-                  {/* ◀◀ prev */}
-                  <button id="prev-clip-btn" className="ctrl-btn" title="Previous clip"
-                    onClick={() => activeIdx > 0 && playClip(activeIdx - 1)}
-                    disabled={activeIdx <= 0}>
-                    <svg viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/>
-                    </svg>
+                <div className="ctrl-row">
+                  {/* ⏮ prev clip */}
+                  <button id="prev-clip-btn" className="cbtn" title="Previous clip"
+                    disabled={activeIdx <= 0}
+                    onClick={() => playClip(activeIdx - 1)}>
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
                   </button>
 
                   {/* ▶ play/pause */}
-                  <button id="play-pause-btn" className="ctrl-btn" title={playing?'Pause':'Play'}
+                  <button id="play-pause-btn" className="cbtn" title={playing ? 'Pause' : 'Play'}
                     onClick={togglePlay}>
                     {playing
                       ? <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                       : <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>}
                   </button>
 
-                  {/* ▶▶ next */}
-                  <button id="next-clip-btn" className="ctrl-btn" title="Next clip"
-                    onClick={() => activeIdx < visible.length - 1 && playClip(activeIdx + 1)}
-                    disabled={activeIdx >= visible.length - 1}>
-                    <svg viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
-                    </svg>
+                  {/* ⏭ next clip */}
+                  <button id="next-clip-btn" className="cbtn" title="Next clip"
+                    disabled={activeIdx >= visible.length - 1}
+                    onClick={() => playClip(activeIdx + 1)}>
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
                   </button>
 
                   {/* Volume */}
-                  <button id="mute-btn" className="ctrl-btn" title="Mute"
+                  <button id="mute-btn" className="cbtn" title="Mute"
                     onClick={() => setVol(v => v > 0 ? 0 : 0.8)}>
                     {vol === 0
-                      ? <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12A4.5 4.5 0 0014 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.796 8.796 0 0021 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06A8.99 8.99 0 0017 19.73l2 2L20.73 20 4.27 3zM12 4 9.91 6.09 12 8.18V4z"/></svg>
-                      : <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>}
+                      ? <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06A8.99 8.99 0 0 0 17 19.73l2 2L20.73 20 4.27 3zM12 4 9.91 6.09 12 8.18V4zm6.5 8A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zM19 12c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71z"/></svg>
+                      : <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>}
                   </button>
-                  <input id="volume-slider" className="vol-slider" type="range"
+                  <input id="vol-slider" className="vol-range" type="range"
                     min="0" max="1" step="0.05" value={vol}
                     onChange={e => setVol(+e.target.value)} aria-label="Volume" />
 
-                  <span className="time-display">{fmt(curTime)} / {fmt(dur)}</span>
-                  <div className="ctrl-spacer" />
+                  <span className="time-txt">{fmt(curTime)} / {fmt(dur)}</span>
+                  <div className="cspacer" />
 
-                  {/* Speed */}
-                  <button id="speed-btn" className="speed-btn" onClick={cycleSpeed} title="Speed">
-                    {speed}×
+                  <button id="speed-btn" className="spd-btn" onClick={() => setSpeedIdx(i => (i + 1) % SPEEDS.length)} title="Speed">
+                    {SPEEDS[speedIdx]}×
                   </button>
                 </div>
               </div>
             )}
           </div>
 
-          {/* ── NOW PLAYING BAR ── */}
-          <div className="now-playing">
-            <span className="np-label">Now Playing</span>
+          {/* ── NOW PLAYING STRIP ── */}
+          <div className="np-strip">
+            <span className="np-lbl">Playing</span>
             {activeClip ? (
               <>
-                <span className="np-info">
-                  {activeClip.startTime
-                    ? dayjs(activeClip.startTime).format('YYYY-MM-DD HH:mm:ss')
-                    : activeClip.filename}
+                <span className="np-time">
+                  {activeClip.startTime ? dayjs(activeClip.startTime).format('YYYY-MM-DD HH:mm:ss') : activeClip.filename}
                 </span>
-                <span className={`np-cam ${camCls(activeClip.channel)}`}>
-                  {camLabel(activeClip.channel)}
-                </span>
-                {autoPlay && activeIdx + 1 < visible.length && (
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>
-                    → Next: {visible[activeIdx+1].startTime
+                <span className={`cam-tag ${camCls(activeClip.channel)}`}>{camLbl(activeClip.channel)}</span>
+                {autoPlay && visible[activeIdx + 1] && (
+                  <span className="np-next-hint">
+                    → next: {visible[activeIdx+1].startTime
                       ? dayjs(visible[activeIdx+1].startTime).format('HH:mm:ss')
                       : visible[activeIdx+1].filename}
                   </span>
                 )}
               </>
             ) : (
-              <span className="np-info" style={{ color: 'var(--text-muted)' }}>No clip selected</span>
+              <span style={{ fontSize: 13, color: 'var(--txt3)' }}>No clip selected</span>
             )}
-            <div className="np-nav">
+
+            <div className="np-spacer" />
+
+            <div className="np-controls">
               {/* Auto-play toggle */}
-              <label id="autoplay-label" className="auto-play-toggle" style={{ marginRight: 10 }}>
-                <div id="autoplay-toggle"
-                  className={`toggle-switch${autoPlay ? ' on' : ''}`}
+              <label id="autoplay-label" className="ap-toggle">
+                <div id="autoplay-toggle" className={`switch${autoPlay ? ' on' : ''}`}
                   onClick={() => setAutoPlay(a => !a)} />
                 Auto-play
               </label>
-              <button id="prev-btn" className="np-nav-btn"
-                disabled={activeIdx <= 0}
+
+              <button id="prev-btn" className="nav-btn" disabled={activeIdx <= 0}
                 onClick={() => playClip(activeIdx - 1)}>‹ Prev</button>
-              <button id="next-btn" className="np-nav-btn"
+              <button id="next-btn" className="nav-btn"
                 disabled={activeIdx < 0 || activeIdx >= visible.length - 1}
                 onClick={() => playClip(activeIdx + 1)}>Next ›</button>
             </div>
           </div>
 
           {/* ── TIMELINE ── */}
-          <div className="timeline-section">
-            <div className="timeline-header">
-              <span className="timeline-title">
-                ◉ History Timeline
-                <span style={{ color:'var(--text-muted)', fontWeight:400, textTransform:'none', letterSpacing:0 }}>
-                  &nbsp;{date}
-                </span>
-              </span>
-              <div className="timeline-legend">
-                <span className="legend-item">
-                  <span className="legend-dot" style={{ background:'var(--clip-fwd)' }}/> Forward
-                </span>
-                <span className="legend-item">
-                  <span className="legend-dot" style={{ background:'var(--clip-in)' }}/> In-Cabin
-                </span>
+          <div className="tl-section">
+            <div className="tl-header">
+              <span className="tl-title">◈ 24-hr DVR Timeline — {date}</span>
+              <div className="tl-legend">
+                <span className="leg-item"><span className="leg-dot" style={{ background:'var(--amber)' }}/> Forward</span>
+                <span className="leg-item"><span className="leg-dot" style={{ background:'var(--emerald)' }}/> In-Cabin</span>
               </div>
             </div>
 
-            <div className="timeline-scroll-wrap" id="timeline-scroll" ref={tlRef}>
-              <div className="timeline-track" style={{ width: TL_W }}>
+            <div className="tl-scroll" id="timeline-scroll" ref={tlRef}>
+              <div className="tl-inner" style={{ width: TL }}>
 
                 {/* Hour labels */}
-                <div className="timeline-hours" style={{ width: TL_W }}>
+                <div className="tl-hours" style={{ width: TL }}>
                   {HOURS.map(h => (
                     <span key={h}>
-                      <span className="hour-label" style={{ left: (h/24)*TL_W }}>
-                        {String(h).padStart(2,'0')}:00
-                      </span>
-                      <span className="hour-tick" style={{ left: (h/24)*TL_W }} />
+                      <span className="h-lbl" style={{ left: (h/24)*TL }}>{String(h).padStart(2,'0')}:00</span>
+                      <span className="h-tick" style={{ left: (h/24)*TL }} />
                     </span>
                   ))}
                 </div>
 
                 {/* Lanes */}
-                <div className="timeline-lanes" style={{ width: TL_W }}>
-                  <span className="lane-label fwd">FWD</span>
-                  <span className="lane-label in">IN</span>
+                <div className="tl-lanes" style={{ width: TL }}>
+                  <span className="lane-lbl fwd">FWD</span>
+                  <span className="lane-lbl in">IN</span>
 
-                  {/* All clips — even filtered-out channels show on timeline */}
                   {clips.map((c, i) => {
                     if (!c.startTime) return null;
-                    const x   = toX(c.startTime);
-                    const w   = segW(c.duration);
-                    const cc  = camCls(c.channel);
+                    const x    = toX(c.startTime);
+                    const w    = segW(c.duration);
+                    const cc   = camCls(c.channel);
                     const vIdx = visible.indexOf(c);
                     const isActive = vIdx !== -1 && vIdx === activeIdx;
                     return (
                       <div
                         key={c.filename + i}
-                        id={`tl-seg-${i}`}
-                        className={`clip-segment ${cc}${isActive ? ' playing' : ''}`}
+                        id={`seg-${i}`}
+                        className={`seg ${cc}${isActive ? ' playing' : ''}`}
                         style={{ left: x, width: w }}
-                        title={`${dayjs(c.startTime).format('HH:mm:ss')} — ${camLabel(c.channel)}`}
+                        title={`${dayjs(c.startTime).format('HH:mm:ss')} — ${camLbl(c.channel)}`}
                         onClick={() => { if (vIdx !== -1) playClip(vIdx); }}
                       />
                     );
                   })}
 
-                  {/* Live playhead */}
+                  {/* Playhead */}
                   {cursorX !== null && (
-                    <div
-                      id="timeline-cursor"
-                      className="timeline-cursor"
-                      style={{ left: cursorX }}
-                    />
+                    <div id="playhead" className="playhead" style={{ left: cursorX }} />
                   )}
                 </div>
               </div>
             </div>
           </div>
         </div>
+
+        {/* ── CLIP LIST (right panel) ── */}
+        <div className="clip-panel">
+          <div className="cp-header">
+            <span className="cp-title">Clip List</span>
+            <span id="clip-count" className="cp-count">{visible.length}</span>
+          </div>
+
+          {visible.length === 0 && !loading && (
+            <div className="empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.2}>
+                <path d="M15 10l4.553-2.369A1 1 0 0121 8.56v6.88a1 1 0 01-1.447.889L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+              </svg>
+              <p>Select a date &amp; camera, then click <strong>Load Clips</strong></p>
+            </div>
+          )}
+
+          <div className="cp-list" ref={listRef}>
+            {visible.map((c, i) => {
+              const ts = c.startTime ? dayjs(c.startTime).format('HH:mm:ss') : c.filename;
+              const cc = camCls(c.channel);
+              return (
+                <div
+                  key={c.filename + i}
+                  data-idx={i}
+                  id={`clip-${i}`}
+                  className={`clip-card${activeIdx === i ? ' active' : ''}`}
+                  onClick={() => playClip(i)}
+                  title={c.filename}
+                >
+                  <div className={`clip-ico ${cc}`}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z"/>
+                    </svg>
+                  </div>
+                  <div className="clip-meta">
+                    <div className="clip-t">{ts}</div>
+                    <div className="clip-f">{c.filename}</div>
+                  </div>
+                  <span className={`cam-tag ${cc}`} style={{ fontSize: 9, padding: '1px 5px' }}>
+                    {camLbl(c.channel)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {/* Toast */}
-      <div className="toast-wrap">
+      <div className="toasts">
         {toast && (
-          <div id="toast-msg" className={`toast ${toast.type}`}>
-            {toast.type === 'success' && '✓ '}
-            {toast.type === 'error'   && '✕ '}
-            {toast.msg}
+          <div id="toast" className={`toast-card ${toast.type}`}>
+            {toast.type === 'success' && '✓ '}{toast.type === 'error' && '✕ '}{toast.msg}
           </div>
         )}
       </div>
