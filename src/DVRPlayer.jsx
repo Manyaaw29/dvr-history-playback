@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import dayjs from 'dayjs';
 import Hls from 'hls.js';
 import { requestClipList, getVideoList, startPlayback, login, DEMO_IMEI } from './api';
-import { MOCK_CLIPS, DEMO_VIDEOS } from './mockData';
+import { MOCK_CLIPS, DEMO_VIDEOS, FALLBACK_VIDEOS } from './mockData';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -40,6 +40,7 @@ export default function DVRPlayer() {
 
   // video state
   const [hasStream, setHasStream] = useState(false);
+  const fallbackIdxRef = useRef(0);
   const [loadingClip, setLoadingClip] = useState(false);
   const [playing,   setPlaying]   = useState(false);
   const [curTime,   setCurTime]   = useState(0);
@@ -160,18 +161,27 @@ export default function DVRPlayer() {
       }
     } catch { /* fallthrough */ }
 
-    // Fallback to demo video
-    if (!url) url = DEMO_VIDEOS[idx % DEMO_VIDEOS.length];
+    // Pick a demo video, build fallback chain
+    const primaryIdx = idx % DEMO_VIDEOS.length;
+    const primary = url || DEMO_VIDEOS[primaryIdx];
+    // Fallback list: remaining DEMO_VIDEOS + guaranteed W3/MDN list
+    const others = [
+      ...DEMO_VIDEOS.filter((_, i) => i !== primaryIdx),
+      ...FALLBACK_VIDEOS,
+    ];
 
     setHasStream(true);
     setLoadingClip(false);
-    attachStream(url);
+    attachStream(primary, others);
   }, [visible, isMock]);
 
-  function attachStream(url) {
+  function attachStream(url, fallbackList) {
     const v = videoRef.current;
     if (!v) return;
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+
+    // Remove previous error handler
+    v.onerror = null;
 
     if (url.includes('.m3u8') && Hls.isSupported()) {
       const hls = new Hls();
@@ -179,11 +189,26 @@ export default function DVRPlayer() {
       hls.loadSource(url);
       hls.attachMedia(v);
       hls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) {
+          hls.destroy();
+          tryFallback(fallbackList);
+        }
+      });
     } else {
       v.src = url;
       v.load();
+      // On error, try next fallback
+      v.onerror = () => tryFallback(fallbackList);
       v.play().catch(() => {});
     }
+  }
+
+  function tryFallback(list) {
+    const remaining = list || [];
+    if (remaining.length === 0) return;
+    const [next, ...rest] = remaining;
+    attachStream(next, rest);
   }
 
   // video event wiring
