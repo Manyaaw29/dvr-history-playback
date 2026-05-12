@@ -12,10 +12,10 @@ const fmt = (s) => {
 const camLbl = (ch) => ch === 1 ? 'FWD' : 'IN';
 const camCls = (ch) => ch === 1 ? 'fwd' : 'in';
 
-// Timeline geometry — 1440 logical px = 24 hours
-const TL = 1440;
+// Timeline geometry — 2880 logical px = 24 hours (2px per minute → 5-min clips = 10 px)
+const TL = 2880;
 const toX  = (t) => { const d = dayjs(t); return ((d.hour()*60 + d.minute() + d.second()/60) / 1440) * TL; };
-const segW = (dur) => Math.max(3, (dur / 86400) * TL);
+const segW = (dur) => Math.max(10, (dur / 86400) * TL);
 
 const HOURS = Array.from({ length: 25 }, (_, i) => i);
 const CAM_OPTS = [
@@ -161,14 +161,13 @@ export default function DVRPlayer() {
       }
     } catch { /* fallthrough */ }
 
-    // Pick a demo video, build fallback chain
-    const primaryIdx = idx % DEMO_VIDEOS.length;
-    const primary = url || DEMO_VIDEOS[primaryIdx];
-    // Fallback list: remaining DEMO_VIDEOS + guaranteed W3/MDN list
-    const others = [
-      ...DEMO_VIDEOS.filter((_, i) => i !== primaryIdx),
-      ...FALLBACK_VIDEOS,
-    ];
+    // In mock/demo mode each clip carries its own videoUrl — use it directly.
+    // For live mode, use the API stream URL with a short fallback chain.
+    const clipVideo = clip.videoUrl || '';
+    const primary = url || clipVideo || DEMO_VIDEOS[idx % DEMO_VIDEOS.length];
+
+    // Fallback: only 2 alternates so a bad URL never cascades to the same last video.
+    const others = FALLBACK_VIDEOS.filter(u => u !== primary);
 
     setHasStream(true);
     setLoadingClip(false);
@@ -180,7 +179,7 @@ export default function DVRPlayer() {
     if (!v) return;
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
-    // Remove previous error handler
+    // Clear stale handlers
     v.onerror = null;
 
     if (url.includes('.m3u8') && Hls.isSupported()) {
@@ -190,15 +189,11 @@ export default function DVRPlayer() {
       hls.attachMedia(v);
       hls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
       hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          hls.destroy();
-          tryFallback(fallbackList);
-        }
+        if (data.fatal) { hls.destroy(); tryFallback(fallbackList); }
       });
     } else {
       v.src = url;
       v.load();
-      // On error, try next fallback
       v.onerror = () => tryFallback(fallbackList);
       v.play().catch(() => {});
     }
@@ -339,7 +334,6 @@ export default function DVRPlayer() {
               id="main-video"
               className="video-el"
               playsInline
-              crossOrigin="anonymous"
             />
 
             {/* Empty / loading state */}
