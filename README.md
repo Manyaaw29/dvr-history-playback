@@ -1,19 +1,27 @@
-# okDriver — DVR History Playback
+# DVR History Playback
 
-A continuous DVR-style History Playback feature for dashcam footage.  
-Built with React + Vite as a standalone single-page application.
+A continuous DVR-style History Playback feature built for the okDriver dashcam platform.
 
-## Features
+## What This Is
+
+This project implements a **DVR-style History Playback** feature that lets you browse, navigate, and play dashcam footage from any day — just like a security DVR system.
+
+### Core Features
 
 | Feature | Description |
 |---|---|
-| **Clickable Timeline** | 24-hour visual timeline with FWD (blue) and In-Cabin (purple) segments — click any segment to jump to that clip |
-| **Auto-play Between Clips** | When a clip ends, the next clip starts automatically (toggle on/off) |
-| **Seamless Navigation** | Prev / Next clip buttons, playback speed (0.5×–4×), volume, seek scrubber |
-| **Date & Camera Filter** | Filter by date, Forward Cam, In-Cabin Cam, or Both |
-| **Live Playhead Cursor** | Orange cursor on the timeline tracks current playback position in real time |
-| **HLS Support** | Uses `hls.js` for adaptive bitrate `.m3u8` streams |
-| **Demo Mode Fallback** | Loads sample clips if the device is offline, so the UI always works |
+| **Clickable Timeline** | A full 24-hour visual timeline showing Forward (amber) and In-Cabin (green) camera segments. Click any segment to instantly jump to and play that clip. |
+| **Auto-play Between Clips** | When a clip ends, the next one starts automatically. A "→ next: HH:MM:SS" preview is shown while playing. Toggle on/off anytime. |
+| **Seamless Video Navigation** | Prev / Next buttons, in-player clip skip controls, seek scrubber, playback speed (0.5× → 4×), and volume control. |
+
+### Additional Features
+- Date picker + camera filter (Both / Forward / In-Cabin)
+- Live playhead cursor that moves across the timeline as video plays
+- Clip list panel showing all recordings for the selected date
+- HLS stream support via `hls.js`
+- Automatic fallback to demo video if device is offline
+
+---
 
 ## Setup Instructions
 
@@ -21,59 +29,75 @@ Built with React + Vite as a standalone single-page application.
 - Node.js ≥ 18
 - npm ≥ 9
 
-### Install & Run
+### Run Locally
 
 ```bash
-git clone https://github.com/<your-username>/okdriver-dvr.git
-cd okdriver-dvr
+# 1. Clone the repo
+git clone https://github.com/Manyaaw29/dvr-history-playback.git
+cd dvr-history-playback
+
+# 2. Install dependencies
 npm install
+
+# 3. Start the dev server
 npm run dev
 ```
 
-App opens at **http://localhost:5175** — no login required, goes straight to the DVR dashboard.
+App opens at **http://localhost:5175**
 
-### Production Build
+### Using the App
 
-```bash
-npm run build
-```
+1. Select a **date** from the top toolbar
+2. Choose a **camera** — Both, Forward, or In-Cabin
+3. Click **⟳ Load Clips** to fetch recordings
+4. Click any **clip in the list** or **segment on the timeline** to play
+5. Use **‹ Prev / Next ›** or let **Auto-play** advance clips automatically
 
-## How to Use
+---
 
-1. Select a **date** from the date picker
-2. Choose a **camera** (Both / Forward / In-Cabin)
-3. Click **Load Clips** — clips appear in the sidebar and timeline
-4. Click any **clip in the sidebar** or **segment on the timeline** to play
-5. Use **Prev / Next** buttons or let **Auto-play** advance clips automatically
-6. Adjust **speed** (0.5×–4×) with the speed button
+## Platform Access
 
-## Architecture
+Live dashcam platform: [dashcam.okdriver.in/user/auth/login](https://dashcam.okdriver.in/user/auth/login)
 
-```
-src/
-├── main.jsx        — React entry point
-├── App.jsx         — Root (mounts DVRPlayer directly)
-├── DVRPlayer.jsx   — Main DVR UI: timeline, player, sidebar, auto-play
-├── api.js          — API layer for smart.okdriver.in endpoints
-├── mockData.js     — Demo clips + video URLs for offline fallback
-└── index.css       — Global design system (vanilla CSS)
-```
+| Field | Value |
+|---|---|
+| Login | demo@okdriver.in |
+| Password | 12345678 |
 
-### API Flow (when device is online)
+> The app connects to the real `smart.okdriver.in` API. If the device is offline, it automatically loads demo clips so the UI always works.
 
-1. `POST /api/playback/request-list/{imei}` — tells device to prepare clip list
-2. Poll `GET /api/playback/videos/{imei}?parsed=true` — waits for clips (up to 60 s)
-3. `POST /api/playback/start/{imei}` — starts stream for selected clip
+---
 
 ## Tech Stack
 
 - **React 19** + **Vite 6**
-- **hls.js** — HLS stream playback
-- **dayjs** — date/time formatting
+- **hls.js** — adaptive bitrate HLS stream playback
+- **dayjs** — date/time parsing and formatting
 - **axios** — HTTP requests
 - **Vanilla CSS** — no UI framework
 
-## Platform
+## Project Structure
 
-Live dashcam platform: [dashcam.okdriver.in](https://dashcam.okdriver.in/user/auth/login)  
-Demo credentials: `demo@okdriver.in` / `12345678`
+```
+src/
+├── main.jsx        — Entry point
+├── App.jsx         — Root component
+├── DVRPlayer.jsx   — Main DVR UI (timeline, player, clip list, auto-play)
+├── api.js          — API layer (smart.okdriver.in endpoints)
+├── mockData.js     — Demo clips + fallback video URLs
+└── index.css       — Global styles and design tokens
+```
+
+## API Flow
+
+```
+1. POST /api/playback/request-list/{imei}   → tell device to prepare clips
+2. GET  /api/playback/videos/{imei}         → poll until clip list is ready
+3. POST /api/playback/start/{imei}          → start stream for selected clip
+```
+
+---
+
+## Demo
+
+> Screen recording: [Add your Loom / Google Drive link here]
