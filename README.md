@@ -54,7 +54,7 @@ App opens at **http://localhost:5175** — no login required, goes straight to t
 
 ### Using the App
 
-1. Select a **date** (default: 2026-05-10, which has preloaded clips)
+1. Select a **date** (defaults to today)
 2. Choose a **camera** — Both / Forward / In-Cabin
 3. Click **⟳ Load Clips**
 4. Click any **clip** in the list or any **segment on the timeline** to play
