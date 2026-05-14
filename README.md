@@ -6,13 +6,14 @@ A continuous DVR-style History Playback feature — clickable timeline, auto-pla
 
 This project implements the three core DVR features required by the assignment:
 
-| Feature | How it works |
-|---|---|
-| **Clickable Timeline** | 24-hour visual timeline with Forward cam (amber) and In-Cabin cam (green) segments. Click any segment to instantly jump to and play that clip. |
-| **Auto-play Between Clips** | When a clip ends, the next one starts automatically. Shows "→ next: HH:MM:SS" preview. Toggle on/off with a switch. |
-| **Seamless Video Navigation** | Prev / Next buttons, in-player skip controls, seek scrubber, playback speed (0.5× → 4×), volume, and mute. |
+| Feature                       | How it works                                                                                                                                   |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Clickable Timeline**        | 24-hour visual timeline with Forward cam (amber) and In-Cabin cam (green) segments. Click any segment to instantly jump to and play that clip. |
+| **Auto-play Between Clips**   | When a clip ends, the next one starts automatically. Shows "→ next: HH:MM:SS" preview. Toggle on/off with a switch.                            |
+| **Seamless Video Navigation** | Prev / Next buttons, in-player skip controls, seek scrubber, playback speed (0.5× → 4×), volume, and mute.                                     |
 
 ### Other Features
+
 - Date picker + camera filter (Both / Forward / In-Cabin)
 - Live playhead cursor moving across the timeline during playback
 - Scrollable clip list panel with timestamps and filenames
@@ -22,9 +23,16 @@ This project implements the three core DVR features required by the assignment:
 
 ---
 
+## Demo Video
+
+Watch a demo of the DVR playback features in action: [Demo Video Link](https://drive.google.com/drive/folders/13QcvsMthLJiAuC3zPKuUJFc6s5nrV3AB?usp=drive_link)
+
+---
+
 ## Setup Instructions
 
 ### Prerequisites
+
 - Node.js ≥ 18
 - npm ≥ 9
 
