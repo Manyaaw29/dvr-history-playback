@@ -87,7 +87,3 @@ POST /api/playback/start/{imei}          → start stream for a clip
 Platform: [dashcam.okdriver.in](https://dashcam.okdriver.in/user/auth/login) | `demo@okdriver.in` / `12345678`
 
 ---
-
-## Demo
-
-> Screen recording: [Add your Loom / Google Drive link here]

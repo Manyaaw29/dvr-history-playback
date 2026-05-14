@@ -24,11 +24,11 @@ const CAM_OPTS = [
   { label: 'In-Cabin', val: '2'    },
 ];
 const SPEEDS = [0.5, 1, 1.5, 2, 4];
-const POLL_MS = 3000, POLL_MAX = 20;
+
 
 // ── component ─────────────────────────────────────────────────────────────────
 export default function DVRPlayer() {
-  const [date,      setDate]      = useState('2026-05-10');
+  const [date,      setDate]      = useState(dayjs().format('YYYY-MM-DD'));
   const [cam,       setCam]       = useState('both');
   const [clips,     setClips]     = useState([]);      // all clips (for timeline)
   const [activeIdx, setActiveIdx] = useState(-1);      // index into visible[]
@@ -50,7 +50,7 @@ export default function DVRPlayer() {
 
   const videoRef = useRef(null);
   const hlsRef   = useRef(null);
-  const pollRef  = useRef(null);
+
   const listRef  = useRef(null);
   const tlRef    = useRef(null);
 
@@ -72,47 +72,32 @@ export default function DVRPlayer() {
     setActiveIdx(-1);
     setHasStream(false);
     setIsMock(false);
-    setStatus('Requesting device…');
+    setStatus('Fetching clips…');
 
     try {
       const chans = cam === 'both' ? [1, 2] : [parseInt(cam)];
       await Promise.all(chans.map(ch => requestClipList(DEMO_IMEI, date, ch).catch(() => {})));
-      setStatus('Waiting for device…');
 
-      let polls = 0;
-      clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        polls++;
-        try {
-          const raw = await getVideoList(DEMO_IMEI);
-          const arr = Array.isArray(raw) ? raw : [];
-          if (arr.length > 0) {
-            clearInterval(pollRef.current);
-            const norm = arr
-              .map(c => ({
-                filename: c.filename || c.name || '',
-                channel:  c.channel ?? 1,
-                startTime:c.startTime || c.start_time || null,
-                duration: c.duration ?? 60,
-              }))
-              .filter(c => c.filename)
-              .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-            setClips(norm);
-            setLoading(false);
-            setStatus('');
-            notify(`${norm.length} clips loaded`, 'success');
-          } else if (polls >= POLL_MAX) {
-            throw new Error('timeout');
-          } else {
-            setStatus(`Polling… ${polls}/${POLL_MAX}`);
-          }
-        } catch {
-          if (polls >= POLL_MAX) {
-            clearInterval(pollRef.current);
-            loadMock();
-          }
-        }
-      }, POLL_MS);
+      const raw = await getVideoList(DEMO_IMEI);
+      const arr = Array.isArray(raw) ? raw : [];
+
+      if (arr.length > 0) {
+        const norm = arr
+          .map(c => ({
+            filename:  c.filename || c.name || '',
+            channel:   c.channel ?? 1,
+            startTime: c.startTime || c.start_time || null,
+            duration:  c.duration ?? 60,
+          }))
+          .filter(c => c.filename)
+          .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+        setClips(norm);
+        setLoading(false);
+        setStatus('');
+        notify(`${norm.length} clips loaded`, 'success');
+      } else {
+        loadMock();
+      }
     } catch {
       loadMock();
     }
@@ -125,8 +110,6 @@ export default function DVRPlayer() {
     setStatus('');
     notify('Demo mode — sample clips loaded', 'info');
   }
-
-  useEffect(() => () => clearInterval(pollRef.current), []);
 
   // ── play a clip ────────────────────────────────────────────────────────────
   const playClip = useCallback(async (idx) => {
